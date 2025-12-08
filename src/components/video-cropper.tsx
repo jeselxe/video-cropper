@@ -11,7 +11,9 @@ interface VideoCropperProps {
   videoWidth: number;
   videoHeight: number;
   containerSize: { width: number; height: number };
-  onLoadedMetadata: () => void;
+  onMetadataAvailable: () => void; // UPDATED PROP
+  isLoading: boolean; // NEW PROP
+  onLoadError: (error: string) => void; // NEW PROP
 }
 
 const VideoCropper: React.FC<VideoCropperProps> = ({
@@ -22,7 +24,9 @@ const VideoCropper: React.FC<VideoCropperProps> = ({
   videoWidth,
   videoHeight,
   containerSize,
-  onLoadedMetadata,
+  onMetadataAvailable,
+  isLoading,
+  onLoadError,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
@@ -193,6 +197,37 @@ const VideoCropper: React.FC<VideoCropperProps> = ({
     };
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
+  const handleVideoError = (
+    e: React.SyntheticEvent<HTMLVideoElement, Event>,
+  ) => {
+    const videoElement = e.currentTarget;
+    let errorMessage = "Unknown video error.";
+
+    if (videoElement.error) {
+      switch (videoElement.error.code) {
+        case videoElement.error.MEDIA_ERR_ABORTED:
+          errorMessage = "Video fetch cancelled by user.";
+          break;
+        case videoElement.error.MEDIA_ERR_NETWORK:
+          errorMessage = "Video download failed due to a network error.";
+          break;
+        case videoElement.error.MEDIA_ERR_DECODE:
+          errorMessage =
+            "Video playback aborted due to a decoding error (invalid format or corrupted file).";
+          break;
+        case videoElement.error.MEDIA_ERR_SRC_NOT_SUPPORTED:
+          errorMessage =
+            "Video format not supported or file could not be found.";
+          break;
+        default:
+          errorMessage = `Video error (Code: ${videoElement.error.code}).`;
+      }
+    }
+
+    // Notify parent and set local state
+    onLoadError(errorMessage);
+  };
+
   const cursorClass = isDragging
     ? dragHandle === "move"
       ? "cursor-grabbing"
@@ -209,7 +244,6 @@ const VideoCropper: React.FC<VideoCropperProps> = ({
   }
 
   return (
-    // Wrapper: tightly wraps video at calculated render size
     <div
       className="video-wrapper"
       style={{ width: renderWidth, height: renderHeight }}
@@ -217,68 +251,70 @@ const VideoCropper: React.FC<VideoCropperProps> = ({
       <video
         ref={videoRef}
         src={videoUrl}
-        onLoadedMetadata={onLoadedMetadata}
+        onLoadedMetadata={onMetadataAvailable} // Primary event
+        onCanPlay={onMetadataAvailable} // Fallback event for heavy videos
+        onError={handleVideoError}
         className="video-player"
         muted
       />
 
-      {/* Overlay is now 100% of wrapper, so it aligns perfectly */}
-      <div
-        className={`cropper-overlay ${cursorClass}`}
-        onMouseDown={handleMouseDown}
-      >
-        {/* Shadows */}
+      {/* Cropper only visible if metadata is loaded (videoWidth > 0) AND not currently loading */}
+      {videoWidth > 0 && !isLoading && (
         <div
-          className="cropper-shadow"
-          style={{ top: 0, left: 0, right: 0, height: cssCrop.y }}
-        />
-        <div
-          className="cropper-shadow"
-          style={{
-            top: cssCrop.y + cssCrop.height,
-            left: 0,
-            right: 0,
-            bottom: 0,
-          }}
-        />
-        <div
-          className="cropper-shadow"
-          style={{
-            top: cssCrop.y,
-            left: 0,
-            width: cssCrop.x,
-            height: cssCrop.height,
-          }}
-        />
-        <div
-          className="cropper-shadow"
-          style={{
-            top: cssCrop.y,
-            left: cssCrop.x + cssCrop.width,
-            right: 0,
-            height: cssCrop.height,
-          }}
-        />
-
-        {/* Crop Box */}
-        <div
-          className="crop-box"
-          style={{
-            left: cssCrop.x,
-            top: cssCrop.y,
-            width: cssCrop.width,
-            height: cssCrop.height,
-          }}
+          className={`cropper-overlay ${cursorClass}`}
+          onMouseDown={handleMouseDown}
         >
-          <div className="crop-handle crop-handle-nw" />
-          <div className="crop-handle crop-handle-ne" />
-          <div className="crop-handle crop-handle-sw" />
-          <div className="crop-handle crop-handle-se" />
-          <div className="crop-move-overlay">
-            <Icon name="Move" />
+          {/* Shadows */}
+          <div
+            className="cropper-shadow"
+            style={{ top: 0, left: 0, right: 0, height: cssCrop.y }}
+          />
+          <div
+            className="cropper-shadow"
+            style={{
+              top: cssCrop.y + cssCrop.height,
+              left: 0,
+              right: 0,
+              bottom: 0,
+            }}
+          />
+          <div
+            className="cropper-shadow"
+            style={{
+              top: cssCrop.y,
+              left: 0,
+              width: cssCrop.x,
+              height: cssCrop.height,
+            }}
+          />
+          <div
+            className="cropper-shadow"
+            style={{
+              top: cssCrop.y,
+              left: cssCrop.x + cssCrop.width,
+              right: 0,
+              height: cssCrop.height,
+            }}
+          />
+
+          {/* Crop Box */}
+          <div
+            className="crop-box"
+            style={{
+              left: cssCrop.x,
+              top: cssCrop.y,
+              width: cssCrop.width,
+              height: cssCrop.height,
+            }}
+          >
+            <div className="crop-handle crop-handle-nw" />
+            <div className="crop-handle crop-handle-ne" />
+            <div className="crop-handle crop-handle-sw" />
+            <div className="crop-handle crop-handle-se" />
+            <div className="crop-move-overlay" />
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };

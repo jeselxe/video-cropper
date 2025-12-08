@@ -39,6 +39,9 @@ const App: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isLogModalOpen, setIsLogModalOpen] = useState(false);
 
+  // Metadata loading state
+  const [isLoadingMetadata, setIsLoadingMetadata] = useState(false);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -82,25 +85,43 @@ const App: React.FC = () => {
         setVideoUrl(convertFileSrc(selected));
         setLogs([]); // Clear logs on new file
         addLog("Loaded file: " + selected, "info");
+        // Set loading state when starting to load a new video
+        setIsLoadingMetadata(true);
       }
     } catch (e) {
       addLog("Failed to open file: " + e, "error");
     }
   };
 
-  const onMetadataLoaded = () => {
+  const onMetadataAvailable = () => {
     if (videoRef.current) {
       const { duration, videoWidth, videoHeight } = videoRef.current;
-      setVideoDuration(duration);
-      setVideoMeta({ width: videoWidth, height: videoHeight });
 
-      // Reset tools to defaults
-      setCurrentCrop({ x: 0, y: 0, width: videoWidth, height: videoHeight });
-      setCurrentSelection({ start: 0, end: duration });
-      addLog(
-        `Metadata: ${videoWidth}x${videoHeight}, ${duration.toFixed(2)}s`,
-        "info",
-      );
+      // Only proceed if duration and dimensions are valid
+      if (
+        videoWidth > 0 &&
+        videoHeight > 0 &&
+        duration > 0 &&
+        isLoadingMetadata
+      ) {
+        setVideoDuration(duration);
+        setVideoMeta({ width: videoWidth, height: videoHeight });
+
+        // Reset tools to defaults
+        setCurrentCrop({ x: 0, y: 0, width: videoWidth, height: videoHeight });
+        setCurrentSelection({ start: 0, end: duration });
+        addLog(
+          `Metadata: ${videoWidth}x${videoHeight}, ${duration.toFixed(2)}s. Ready for edit.`,
+          "info",
+        );
+        setIsLoadingMetadata(false); // Finished loading
+      } else if (isLoadingMetadata) {
+        // Log a progress message if data is still incomplete
+        addLog(
+          "Video metadata pending. Dimensions or duration not yet available...",
+          "progress",
+        );
+      }
     }
   };
 
@@ -144,6 +165,21 @@ const App: React.FC = () => {
     }
   };
 
+  const handleVideoLoadError = useCallback(
+    (message: string) => {
+      // Clear all video related states on error
+      setVideoPath(null);
+      setVideoUrl(null);
+      setVideoDuration(0);
+      setIsProcessing(false);
+      setIsLoadingMetadata(false);
+
+      // Set the main app error state
+      addLog(`Video load failed: ${message}`, "error");
+    },
+    [addLog],
+  );
+
   // --- Listeners ---
   useEffect(() => {
     const unlisten = [
@@ -166,8 +202,13 @@ const App: React.FC = () => {
   const lastLog =
     logs.length > 0
       ? logs[logs.length - 1]
-      : { type: "info", message: "Ready" };
+      : {
+          type: "info",
+          message: isLoadingMetadata ? "Loading metadata..." : "Ready",
+        };
   const cropInfo = `${Math.round(currentCrop.width)}×${Math.round(currentCrop.height)}`;
+
+  const isReady = videoUrl && videoMeta.width > 0 && !isLoadingMetadata;
 
   return (
     <>
@@ -193,13 +234,41 @@ const App: React.FC = () => {
               videoWidth={videoMeta.width}
               videoHeight={videoMeta.height}
               containerSize={containerSize}
-              onLoadedMetadata={onMetadataLoaded}
+              onMetadataAvailable={onMetadataAvailable} // Use new callback
+              isLoading={isLoadingMetadata} // Pass loading state
+              onLoadError={handleVideoLoadError}
             />
+            {/* Overlay for loading state */}
+            {videoUrl && isLoadingMetadata && (
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: "rgba(0,0,0,0.8)",
+                  zIndex: 50,
+                  color: "white",
+                }}
+              >
+                <Icon name="Loader" width={48} height={48} />
+                <span style={{ marginTop: "1rem", fontSize: "1.2rem" }}>
+                  Loading video metadata...
+                </span>
+                <span
+                  style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}
+                >
+                  Waiting for browser to parse video dimensions and duration.
+                </span>
+              </div>
+            )}
           </div>
 
           {/* 2. Controls Area */}
           <div className="editor-panel">
-            {videoUrl ? (
+            {isReady ? (
               <>
                 <TimelineSelector
                   duration={videoDuration}
@@ -246,7 +315,11 @@ const App: React.FC = () => {
                   color: "var(--text-muted)",
                 }}
               >
-                No video selected
+                {videoUrl
+                  ? isLoadingMetadata
+                    ? "Loading video data..."
+                    : "Video metadata failed to load or is unavailable."
+                  : "No video selected"}
               </div>
             )}
           </div>
@@ -258,8 +331,12 @@ const App: React.FC = () => {
             className="status-btn"
             onClick={() => setIsLogModalOpen(true)}
           >
-            <div className={`status-dot ${lastLog.type}`} />
-            <span>{lastLog.message}</span>
+            <div
+              className={`status-dot ${isProcessing || isLoadingMetadata ? "processing" : lastLog.type}`}
+            />
+            <span>
+              {isLoadingMetadata ? "Loading metadata..." : lastLog.message}
+            </span>
           </button>
           <div style={{ opacity: 0.5 }}>
             {videoPath ? videoPath.split(/[/\\]/).pop() : ""}
