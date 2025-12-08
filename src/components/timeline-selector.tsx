@@ -11,6 +11,13 @@ interface TimelineSelectorProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
 }
 
+// Define step sizes for different modifier key combinations
+const STEP_SIZES = {
+  DEFAULT: 0.1, // 100ms
+  FINE: 0.01, // 10ms (Alt/Option)
+  COARSE: 1.0, // 1 second (Shift)
+};
+
 const TimelineSelector: React.FC<TimelineSelectorProps> = ({
   duration,
   selection,
@@ -22,8 +29,9 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
   const [dragHandle, setDragHandle] = useState<DragHandle>(null);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [focusedHandle, setFocusedHandle] = useState<DragHandle>(null);
 
-  // Sync play state with video
+  // ... [Existing useEffect for video playback sync remains unchanged] ...
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -33,7 +41,7 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
     const onTimeUpdate = () => {
       setCurrentTime(video.currentTime);
       // Auto-pause if we hit the end of selection
-      if (video.currentTime >= selection.end && !video.paused) {
+      if (video.currentTime >= selection.end - 0.05 && !video.paused) {
         video.pause();
         video.currentTime = selection.end;
       }
@@ -53,7 +61,6 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
   const togglePlay = () => {
     if (videoRef.current) {
       if (videoRef.current.paused) {
-        // If at end of selection, restart from start of selection
         if (videoRef.current.currentTime >= selection.end - 0.1) {
           videoRef.current.currentTime = selection.start;
         }
@@ -68,14 +75,84 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
   const percentToSeconds = (percent: number) => (percent / 100) * duration;
   const secondsToPercent = (seconds: number) => (seconds / duration) * 100;
 
-  // --- Dragging Logic ---
+  // --- Keyboard Logic (UPDATED) ---
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
 
-  const handleMouseDown = (e: React.MouseEvent, handle: DragHandle) => {
+      e.preventDefault(); // Prevent page scroll
+
+      const currentHandle = e.currentTarget.classList.contains(
+        "timeline-handle-start",
+      )
+        ? "start"
+        : "end";
+      let newTime = currentHandle === "start" ? selection.start : selection.end;
+
+      // 1. Determine Step Size based on modifiers
+      let step = STEP_SIZES.DEFAULT;
+      if (e.shiftKey) {
+        step = STEP_SIZES.COARSE;
+      } else if (e.altKey) {
+        step = STEP_SIZES.FINE;
+      }
+
+      // 2. Determine Direction
+      const delta = e.key === "ArrowRight" ? step : -step;
+
+      // 3. Apply change
+      newTime += delta;
+
+      let newSelection = { ...selection };
+      // The minimum duration should be larger than the largest possible step size
+      const minDurationConstraint = Math.max(STEP_SIZES.COARSE, 0.2);
+
+      if (currentHandle === "start") {
+        // Clamp start time between 0 and (end - minDurationConstraint)
+        newTime = clamp(newTime, 0, selection.end - minDurationConstraint);
+        newSelection.start = newTime;
+      } else if (currentHandle === "end") {
+        // Clamp end time between (start + minDurationConstraint) and duration
+        newTime = clamp(
+          newTime,
+          selection.start + minDurationConstraint,
+          duration,
+        );
+        newSelection.end = newTime;
+      }
+
+      // Ensure that floating point arithmetic errors are handled by rounding
+      newSelection.start = parseFloat(newSelection.start.toFixed(3));
+      newSelection.end = parseFloat(newSelection.end.toFixed(3));
+
+      if (
+        newSelection.start !== selection.start ||
+        newSelection.end !== selection.end
+      ) {
+        onSelectionChange(newSelection);
+
+        // UX: Seek video to the new position
+        if (videoRef.current) {
+          videoRef.current.currentTime = newTime;
+        }
+      }
+    },
+    [selection, duration, onSelectionChange, videoRef],
+  );
+
+  // ... [Dragging Logic (handleMouseDown, handleMouseMove, handleMouseUp) remains unchanged] ...
+  const handleMouseDown = (
+    e: React.MouseEvent<HTMLDivElement>,
+    handle: DragHandle,
+  ) => {
     e.preventDefault();
     e.stopPropagation();
+
+    (e.currentTarget as HTMLDivElement).focus();
+    setFocusedHandle(handle);
+
     setIsDragging(true);
     setDragHandle(handle);
-    // Pause while scrubbing for better performance usually
     if (videoRef.current && !videoRef.current.paused) {
       videoRef.current.pause();
     }
@@ -89,7 +166,7 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
       const rawPercent = ((e.clientX - rect.left) / rect.width) * 100;
       const clampedPercent = clamp(rawPercent, 0, 100);
       let time = percentToSeconds(clampedPercent);
-      const minDuration = 1.0; // Minimum clip length 1s
+      const minDuration = 0.2;
 
       const newSelection = { ...selection };
 
@@ -103,7 +180,6 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
 
       onSelectionChange(newSelection);
 
-      // UX: Seek video to the handle being dragged to preview cut point
       if (videoRef.current) {
         videoRef.current.currentTime = time;
       }
@@ -127,7 +203,7 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
     };
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
-  // Handle clicking on track to seek
+  // ... [handleTrackClick remains unchanged] ...
   const handleTrackClick = (e: React.MouseEvent) => {
     if (!timelineRef.current || duration === 0) return;
     const rect = timelineRef.current.getBoundingClientRect();
@@ -148,7 +224,6 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
       <div className="toolbar" style={{ marginBottom: "0.5rem" }}>
         <button className="btn btn-secondary btn-icon" onClick={togglePlay}>
           {isPlaying ? (
-            // You might need a Pause icon in icon.tsx, using Loader temporarily or add one
             <div
               style={{
                 width: 10,
@@ -185,27 +260,29 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
         ref={timelineRef}
         onMouseDown={handleTrackClick}
       >
-        {/* Selection Highlight */}
         <div
           className="timeline-selection"
           style={{ left: `${startPct}%`, width: `${endPct - startPct}%` }}
         />
-
-        {/* Playhead */}
         <div className="timeline-playhead" style={{ left: `${currentPct}%` }} />
 
-        {/* Handles */}
         <div
-          className="timeline-handle"
+          className={`timeline-handle timeline-handle-start ${focusedHandle === "start" ? "is-focused" : ""}`}
           style={{ left: `${startPct}%` }}
           onMouseDown={(e) => handleMouseDown(e, "start")}
+          onBlur={() => setFocusedHandle(null)}
+          onKeyDown={handleKeyDown}
+          tabIndex={0}
         >
           <Icon name="Rewind" width={12} height={12} />
         </div>
         <div
-          className="timeline-handle"
+          className={`timeline-handle timeline-handle-end ${focusedHandle === "end" ? "is-focused" : ""}`}
           style={{ left: `${endPct}%` }}
           onMouseDown={(e) => handleMouseDown(e, "end")}
+          onBlur={() => setFocusedHandle(null)}
+          onKeyDown={handleKeyDown}
+          tabIndex={0}
         >
           <Icon name="FastForward" width={12} height={12} />
         </div>

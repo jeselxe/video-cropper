@@ -18,6 +18,22 @@ This tool is designed for quickly isolating a segment of a video and adjusting i
 
 -----
 
+##  Usage
+
+You can drag the video player to adjust the crop area.
+
+Also you can select the video segment by clicking and dragging on the timeline handles. When a handle is selected, you can also use the keyboard controls to fine-tune the start and end points.
+
+### Summary of Keyboard Controls:
+
+| Key Combination | Step Size | Precision Level |
+| :--- | :--- | :--- |
+| **←** or **→** | **0.1 seconds** | Normal Trim |
+| **Shift + ←** or **Shift + →** | **1.0 second** | Coarse Jump |
+| **Alt/Option + ←** or **Alt/Option + →** | **0.01 seconds** | Fine Adjustment (High Precision) |
+
+-----
+
 ## 💻 Technologies Used
 
 | Layer | Technology | Purpose |

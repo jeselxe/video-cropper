@@ -252,6 +252,20 @@ body {
     background: var(--primary);
     color: white;
 }
+.timeline-handle:focus {
+    /* Remove default outline */
+    outline: none;
+    /* Add a clear visual focus ring */
+    box-shadow:
+        0 0 0 3px var(--primary),
+        0 0 0 6px rgba(255, 255, 255, 0.2);
+}
+
+.timeline-handle.is-focused {
+    /* Optional visual change when focused */
+    background: var(--primary);
+    color: white;
+}
 
 /* Cropper Visuals */
 .cropper-shadow {
