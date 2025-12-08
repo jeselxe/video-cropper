@@ -23,3 +23,5 @@ export interface LogEntry {
   message: string;
   type: "info" | "progress" | "error" | "success";
 }
+export type DragHandle = "start" | "end" | null;
+export type CropHandle = "move" | "nw" | "ne" | "sw" | "se" | null;

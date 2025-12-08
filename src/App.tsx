@@ -2,35 +2,32 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/api/dialog";
-import {
-  Clock,
-  Crop,
-  Download,
-  List,
-  Loader,
-  Play,
-  XCircle,
-} from "lucide-react";
 
 import VideoCropper from "./components/video-cropper";
 import TimelineSelector from "./components/timeline-selector";
 
 import { ClipSelection, CropArea, ExportArgs, LogEntry } from "./types";
-
-const initialCrop: CropArea = { x: 0, y: 0, width: 1280, height: 720 };
-const initialSelection: ClipSelection = { start: 0, end: 10 };
+import Icon from "./components/icon";
+import StatusLog from "./components/status-log";
+import { formatTime } from "./utils/format";
 
 const App: React.FC = () => {
   const [videoPath, setVideoPath] = useState<string | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [videoDuration, setVideoDuration] = useState<number>(0);
-  const [videoWidth, setVideoWidth] = useState<number>(initialCrop.width);
-  const [videoHeight, setVideoHeight] = useState<number>(initialCrop.height);
+  const [videoWidth, setVideoWidth] = useState<number>(1280);
+  const [videoHeight, setVideoHeight] = useState<number>(720);
 
-  // States for the video processing logic
-  const [currentCrop, setCurrentCrop] = useState<CropArea>(initialCrop);
-  const [currentSelection, setCurrentSelection] =
-    useState<ClipSelection>(initialSelection);
+  const [currentCrop, setCurrentCrop] = useState<CropArea>({
+    x: 0,
+    y: 0,
+    width: 1280,
+    height: 720,
+  });
+  const [currentSelection, setCurrentSelection] = useState<ClipSelection>({
+    start: 0,
+    end: 10,
+  });
 
   const [statusLog, setStatusLog] = useState<LogEntry[]>([]);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
@@ -42,7 +39,6 @@ const App: React.FC = () => {
 
   const addLogEntry = useCallback(
     (message: string, type: "info" | "progress" | "error" | "success") => {
-      console.log("Add", message);
       setStatusLog((prevLog) => {
         const lastEntry = prevLog.slice(-1)[0];
         if (
@@ -50,7 +46,6 @@ const App: React.FC = () => {
           lastEntry.type === "progress" &&
           lastEntry.message === message
         ) {
-          // If the last entry was progress AND had the exact same message, skip adding the new one.
           return prevLog;
         }
         const newEntry: LogEntry = {
@@ -59,21 +54,18 @@ const App: React.FC = () => {
           message,
           type,
         };
-        // Keep a maximum of, say, 50 entries to prevent memory issues for long tasks
         return [...prevLog, newEntry];
       });
     },
     [],
   );
 
-  // 1. Update container size on mount and resize for responsive layout
   useEffect(() => {
     const updateSize = () => {
       if (containerRef.current) {
         setContainerSize({
           width: containerRef.current.clientWidth,
-          // Set a max height, or calculate based on aspect ratio
-          height: Math.min((containerRef.current.clientWidth * 9) / 16, 600),
+          height: Math.min((containerRef.current.clientWidth * 9) / 16, 480),
         });
       }
     };
@@ -83,7 +75,6 @@ const App: React.FC = () => {
     return () => window.removeEventListener("resize", updateSize);
   }, []);
 
-  // 2. Load Video
   const selectFile = async () => {
     setError(null);
     setStatusLog([]);
@@ -101,8 +92,6 @@ const App: React.FC = () => {
     }
   };
 
-  // 3. Set Video Metadata (when metadata is loaded)
-  // This function was correctly defined but not assigned to the <video> element.
   const handleLoadedMetadata = useCallback(() => {
     if (videoRef.current) {
       const duration = videoRef.current.duration;
@@ -112,22 +101,16 @@ const App: React.FC = () => {
       setVideoDuration(duration);
       setVideoWidth(width);
       setVideoHeight(height);
-
-      // Initialize selection and crop to full video bounds
       setCurrentSelection({ start: 0, end: duration });
       setCurrentCrop({ x: 0, y: 0, width: width, height: height });
 
       addLogEntry(
-        `Video loaded. Resolution: ${width}x${height}, Duration: ${duration.toFixed(1)}s`,
+        `Video loaded: ${width}x${height}, ${duration.toFixed(1)}s`,
         "success",
       );
     }
   }, [addLogEntry]);
 
-  // NOTE: We need to ensure handleLoadedMetadata is attached to the <video> element.
-  // It has been added inside the VideoCropper component JSX.
-
-  // 4. Command Invocation and Export Handling (Same as before)
   const handleExport = async () => {
     if (!videoPath) {
       const msg =
@@ -251,155 +234,148 @@ const App: React.FC = () => {
     };
   }, [addLogEntry]);
 
-  // --- Utility Functions ---
+  const formattedCrop = `${Math.round(currentCrop.width)}×${Math.round(currentCrop.height)}`;
+  const cropPosition = `(${Math.round(currentCrop.x)}, ${Math.round(currentCrop.y)})`;
 
-  const formatTime = (seconds: number) => {
-    if (isNaN(seconds) || seconds < 0) return "00:00.0";
-    const min = Math.floor(seconds / 60);
-    const sec = Math.floor(seconds % 60);
-    const ms = Math.floor((seconds * 10) % 10);
-    return `${min.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}.${ms}`;
-  };
-
-  const formattedCrop = `${currentCrop.width.toFixed(2)}x${currentCrop.height.toFixed(2)} @ x:${currentCrop.x.toFixed(2)}, y:${currentCrop.y.toFixed(2)}`;
-
-  // Find the last actual status message (not just info/error) for display under the loading icon
-  const lastProcessingMessage =
+  const lastProgressMessage =
     statusLog.filter((log) => log.type === "progress").slice(-1)[0]?.message ||
-    (isProcessing ? "FFmpeg process is running..." : "Ready.");
+    "Ready";
 
   return (
-    <div className="app-container">
-      <div ref={containerRef} className="main-card">
-        {/* Video Viewer & Cropper */}
-        <VideoCropper
-          videoUrl={videoUrl}
-          videoRef={videoRef}
-          currentCrop={currentCrop}
-          onCropChange={setCurrentCrop}
-          videoWidth={videoWidth}
-          videoHeight={videoHeight}
-          containerSize={containerSize}
-          handleLoadedMetadata={handleLoadedMetadata}
-        />
-        <TimelineSelector
-          duration={videoDuration}
-          selection={currentSelection}
-          onSelectionChange={setCurrentSelection}
-          videoRef={videoRef}
-        />
-
-        {/* Controls */}
-        <div className="grid-3-col mb-6">
-          {/* File Selector */}
-          <button
-            onClick={selectFile}
-            className="btn-primary"
-            disabled={isProcessing}
-          >
-            <Play style={{ width: 20, height: 20, marginRight: 8 }} />
-            Select Video
-          </button>
-
-          {/* Crop Display */}
-          <div className="info-box">
-            <Crop className="info-icon" />
-            <div className="text-sm font-mono text-right">
-              Crop: <span className="font-bold">{formattedCrop}</span>
-            </div>
-          </div>
-
-          {/* Timeline Display */}
-          <div className="info-box">
-            <Clock className="info-icon" />
-            <div className="text-sm font-mono text-right">
-              Trim:{" "}
-              <span className="font-bold">
-                {formatTime(currentSelection.start)} -{" "}
-                {formatTime(currentSelection.end)}
-              </span>
-            </div>
-          </div>
+    <>
+      <div className="app-container">
+        <div className="app-header">
+          <h1 className="app-title">Video Trim & Crop Tool</h1>
         </div>
 
-        {/* Export Button */}
-        <div className="mt-4">
-          <button
-            onClick={handleExport}
-            className="btn-primary btn-export w-full"
-            disabled={
-              !videoPath ||
-              isProcessing ||
-              videoDuration === 0 ||
-              currentSelection.end <= currentSelection.start
-            }
-          >
-            {isProcessing ? (
-              <>
-                <Loader
-                  style={{ width: 20, height: 20, marginRight: 8 }}
-                  className="animate-spin"
-                />
-                EXPORTING...
-              </>
-            ) : (
-              <>
-                <Download style={{ width: 20, height: 20, marginRight: 8 }} />
-                Export Trimmed & Cropped Video
-              </>
-            )}
-          </button>
-        </div>
-
-        {/* Status/Error Messages */}
-        <div className="status-box">
-          {isProcessing && (
-            <div className="status-processing">
-              <Loader
-                style={{ width: 16, height: 16, marginRight: 8 }}
-                className="animate-spin"
+        <div className="app-body">
+          {/* Video Display Section */}
+          <div className="section">
+            <div ref={containerRef}>
+              <VideoCropper
+                videoUrl={videoUrl}
+                videoRef={videoRef}
+                currentCrop={currentCrop}
+                onCropChange={setCurrentCrop}
+                videoWidth={videoWidth}
+                videoHeight={videoHeight}
+                containerSize={containerSize}
+                onLoadedMetadata={handleLoadedMetadata}
               />
-              <span className="text-sm font-medium">
-                {lastProcessingMessage}
-              </span>
+            </div>
+          </div>
+
+          {/* Timeline Section */}
+          {videoDuration > 0 && (
+            <div className="section">
+              <TimelineSelector
+                duration={videoDuration}
+                selection={currentSelection}
+                onSelectionChange={setCurrentSelection}
+                videoRef={videoRef}
+              />
             </div>
           )}
-          {error &&
-            !isProcessing && ( // Only show persistent error if not currently processing
-              <div className="status-error">
-                <XCircle style={{ width: 20, height: 20, marginRight: 8 }} />
-                <span className="text-sm font-medium">{error}</span>
-              </div>
-            )}
-          {!isProcessing &&
-            statusLog.length > 0 &&
-            statusLog.slice(-1)[0].type === "success" && (
-              <div className="status-success">
-                <span className="text-sm font-medium">
-                  {statusLog.slice(-1)[0].message}
-                </span>
-              </div>
-            )}
-        </div>
 
-        {/* Status Log Viewer */}
-        <div className="log-container">
-          <div className="log-header">
-            <List style={{ width: 16, height: 16, marginRight: 8 }} />
-            Process Log ({statusLog.length} entries)
-          </div>
-          {statusLog.map((entry, i) => (
-            <div key={i} className={`log-entry log-${entry.type}`}>
-              <span className="log-timestamp">[{entry.timestamp}]</span>
-              <span className="log-message">{entry.message}</span>
+          {/* Controls Section */}
+          <div className="section">
+            <div className="controls-grid">
+              <button
+                onClick={selectFile}
+                className="btn btn-primary"
+                disabled={isProcessing}
+              >
+                <Icon name="Play" />
+                Select Video
+              </button>
+
+              <div className="control-card">
+                <div className="control-label">
+                  <Icon name="Crop" /> Crop Area
+                </div>
+                <div className="control-value">{formattedCrop}</div>
+                <div className="control-subvalue">{cropPosition}</div>
+              </div>
+
+              <div className="control-card">
+                <div className="control-label">
+                  <Icon name="Clock" /> Duration
+                </div>
+                <div className="control-value">
+                  {formatTime(currentSelection.end - currentSelection.start)}
+                </div>
+                <div className="control-subvalue">
+                  {formatTime(currentSelection.start)} →{" "}
+                  {formatTime(currentSelection.end)}
+                </div>
+              </div>
             </div>
-          ))}
+          </div>
+
+          {/* Export Button */}
+          <div className="section">
+            <button
+              onClick={handleExport}
+              className="btn btn-success"
+              style={{ width: "100%" }}
+              disabled={
+                !videoPath ||
+                isProcessing ||
+                videoDuration === 0 ||
+                currentSelection.end <= currentSelection.start
+              }
+            >
+              {isProcessing ? (
+                <>
+                  <Icon name="Loader" />
+                  Exporting...
+                </>
+              ) : (
+                <>
+                  <Icon name="Download" />
+                  Export Video
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Status Messages */}
+          <div className="status-area">
+            {isProcessing && (
+              <div className="status-message status-processing">
+                <Icon name="Loader" />
+                <span>{lastProgressMessage}</span>
+              </div>
+            )}
+            {error && !isProcessing && (
+              <div className="status-message status-error">
+                <Icon name="XCircle" />
+                <span>{error}</span>
+              </div>
+            )}
+            {!isProcessing &&
+              statusLog.length > 0 &&
+              statusLog[statusLog.length - 1].type === "success" && (
+                <div className="status-message status-success">
+                  <span>{statusLog[statusLog.length - 1].message}</span>
+                </div>
+              )}
+          </div>
+
+          {/* Process Log */}
+          {statusLog.length > 0 && (
+            <div className="section">
+              <StatusLog logs={statusLog} />
+            </div>
+          )}
         </div>
 
-        <p className="footer-text">Source Path: {videoPath || "None"}</p>
+        <div className="app-footer">
+          Source:{" "}
+          <span className="footer-path">{videoPath || "No file selected"}</span>
+        </div>
       </div>
-    </div>
+    </>
   );
 };
-
 export default App;

@@ -1,8 +1,8 @@
-import { FastForward, Rewind } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ClipSelection } from "../types";
-
-type DragHandle = "start" | "end" | null;
+import { ClipSelection, DragHandle } from "../types";
+import { clamp } from "../utils";
+import { formatTime, formatTimeShort } from "../utils/format";
+import Icon from "./icon";
 
 interface TimelineSelectorProps {
   duration: number;
@@ -22,38 +22,25 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
   const [dragHandle, setDragHandle] = useState<DragHandle>(null);
   const [currentTime, setCurrentTime] = useState<number>(0);
 
-  const formattedTime = (time: number) => {
-    if (isNaN(time) || time < 0) return "00:00";
-    const min = Math.floor(time / 60);
-    const sec = Math.floor(time % 60);
-    return `${min.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
-  };
-
-  // --- Time/Position Calculations ---
   const startPercent = (selection.start / duration) * 100;
   const endPercent = (selection.end / duration) * 100;
   const playheadPercent = (currentTime / duration) * 100;
 
-  // --- Handlers ---
-
-  // Seek the video element to the start time whenever selection changes
   useEffect(() => {
     if (videoRef.current && selection.start !== videoRef.current.currentTime) {
       videoRef.current.currentTime = selection.start;
     }
   }, [selection.start, videoRef]);
 
-  // Update current time on video playback
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
     const handleTimeUpdate = () => {
       setCurrentTime(video.currentTime);
-      // Auto-pause when playback hits the end selection
       if (video.currentTime >= selection.end) {
         video.pause();
-        video.currentTime = selection.end; // Snap to the end time
+        video.currentTime = selection.end;
       }
     };
 
@@ -61,14 +48,12 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
     return () => video.removeEventListener("timeupdate", handleTimeUpdate);
   }, [videoRef, selection.end]);
 
-  // const secondsToPercent = (seconds: number) => (seconds / duration) * 100;
   const percentToSeconds = (percent: number) => (percent / 100) * duration;
 
   const handleMouseDown = (e: React.MouseEvent, handle: DragHandle) => {
     if (duration === 0 || !timelineRef.current) return;
     e.preventDefault();
     e.stopPropagation();
-
     setIsDragging(true);
     setDragHandle(handle);
   };
@@ -79,26 +64,19 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
         return;
 
       const timelineRect = timelineRef.current.getBoundingClientRect();
-      const clientX = e.clientX;
-
-      // Calculate the raw percentage offset from the left edge of the timeline
       let newPercent =
-        ((clientX - timelineRect.left) / timelineRect.width) * 100;
-
-      // Clamp percentage between 0 and 100
-      newPercent = Math.max(0, Math.min(100, newPercent));
+        ((e.clientX - timelineRect.left) / timelineRect.width) * 100;
+      newPercent = clamp(newPercent, 0, 100);
 
       let newTime = percentToSeconds(newPercent);
       let newSelection = { ...selection };
-      const minDuration = 0.5; // Minimum selection duration in seconds
+      const minDuration = 0.5;
 
       if (dragHandle === "start") {
-        // New start must be before end, respecting minimum duration
         newTime = Math.min(newTime, selection.end - minDuration);
         newSelection.start = newTime;
         if (videoRef.current) videoRef.current.currentTime = newTime;
       } else if (dragHandle === "end") {
-        // New end must be after start, respecting minimum duration
         newTime = Math.max(newTime, selection.start + minDuration);
         newSelection.end = newTime;
       }
@@ -123,27 +101,22 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
 
   const handleTimelineClick = (e: React.MouseEvent) => {
     if (!timelineRef.current || duration === 0) return;
-    e.stopPropagation(); // Stop propagation to prevent accidental clicks on handles from seeking
+    e.stopPropagation();
 
     const timelineRect = timelineRef.current.getBoundingClientRect();
-    const clientX = e.clientX;
-
     let clickPercent =
-      ((clientX - timelineRect.left) / timelineRect.width) * 100;
-    clickPercent = Math.max(0, Math.min(100, clickPercent));
+      ((e.clientX - timelineRect.left) / timelineRect.width) * 100;
+    clickPercent = clamp(clickPercent, 0, 100);
 
     const newTime = percentToSeconds(clickPercent);
-
     if (videoRef.current) {
       videoRef.current.currentTime = newTime;
     }
   };
 
-  // Attach global mouse listeners for dragging
   useEffect(() => {
     document.addEventListener("mousemove", handleMouseMove);
     document.addEventListener("mouseup", handleMouseUp);
-
     return () => {
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
@@ -153,20 +126,19 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
   if (duration === 0) return null;
 
   return (
-    <div className="timeline-box">
-      <p className="timeline-label">
-        Timeline Selector (Total: {formattedTime(duration)})
-      </p>
+    <div className="timeline-container">
+      <div className="timeline-header">
+        <span className="timeline-title">Timeline</span>
+        <span className="timeline-duration">{formatTimeShort(duration)}</span>
+      </div>
 
       <div
         ref={timelineRef}
         className="timeline-track"
         onMouseDown={handleTimelineClick}
       >
-        {/* Full Duration Track */}
-        <div className="timeline-full-track" />
+        <div className="timeline-bg" />
 
-        {/* Selected Range Visual */}
         <div
           className="timeline-selection"
           style={{
@@ -175,7 +147,6 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
           }}
         />
 
-        {/* Current Playhead */}
         {videoRef.current && (
           <div
             className="timeline-playhead"
@@ -183,40 +154,34 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
           />
         )}
 
-        {/* Start Handle */}
         <div
-          className="timeline-handle"
+          className="timeline-handle timeline-handle-start"
           style={{ left: `${startPercent}%` }}
-          title={`Start: ${formattedTime(selection.start)}`}
+          title={`Start: ${formatTimeShort(selection.start)}`}
           onMouseDown={(e) => handleMouseDown(e, "start")}
-          onClick={(e) => e.stopPropagation()} // Prevent timeline click on handle
+          onClick={(e) => e.stopPropagation()}
         >
-          <Rewind className="handle-icon" />
+          <Icon name="Rewind" />
         </div>
 
-        {/* End Handle */}
         <div
-          className="timeline-handle"
+          className="timeline-handle timeline-handle-end"
           style={{ left: `${endPercent}%` }}
-          title={`End: ${formattedTime(selection.end)}`}
+          title={`End: ${formatTimeShort(selection.end)}`}
           onMouseDown={(e) => handleMouseDown(e, "end")}
-          onClick={(e) => e.stopPropagation()} // Prevent timeline click on handle
+          onClick={(e) => e.stopPropagation()}
         >
-          <FastForward className="handle-icon" />
+          <Icon name="FastForward" />
         </div>
       </div>
 
-      {/* Time Labels */}
-      <div className="timeline-labels-footer">
-        <span className="timeline-time-label">
-          Start: {formattedTime(selection.start)}
+      <div className="timeline-labels">
+        <span className="timeline-label-start">
+          {formatTime(selection.start)}
         </span>
-        <span className="timeline-time-label">
-          End: {formattedTime(selection.end)}
-        </span>
+        <span className="timeline-label-end">{formatTime(selection.end)}</span>
       </div>
     </div>
   );
 };
-
 export default TimelineSelector;
