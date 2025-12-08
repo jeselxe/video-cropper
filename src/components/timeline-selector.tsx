@@ -30,6 +30,16 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [focusedHandle, setFocusedHandle] = useState<DragHandle>(null);
+  const [isMuted, setIsMuted] = useState(true); // NEW: Mute state
+
+  // --- Mute Sync/Initialization ---
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video) {
+      // Initialize state based on the video element's current state
+      setIsMuted(video.muted);
+    }
+  }, [videoRef]);
 
   // ... [Existing useEffect for video playback sync remains unchanged] ...
   useEffect(() => {
@@ -68,6 +78,13 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
       } else {
         videoRef.current.pause();
       }
+    }
+  };
+  const toggleMute = () => {
+    if (videoRef.current) {
+      const newState = !videoRef.current.muted;
+      videoRef.current.muted = newState;
+      setIsMuted(newState);
     }
   };
 
@@ -222,21 +239,26 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
   return (
     <div className="timeline-wrapper">
       <div className="toolbar" style={{ marginBottom: "0.5rem" }}>
-        <button className="btn btn-secondary btn-icon" onClick={togglePlay}>
-          {isPlaying ? (
-            <div
-              style={{
-                width: 10,
-                height: 10,
-                background: "currentColor",
-                borderRight: "4px solid transparent",
-                borderLeft: "4px solid transparent",
-              }}
-            />
-          ) : (
-            <Icon name="Play" />
-          )}
-        </button>
+        <div className="toolbar-controls">
+          <button className="btn btn-secondary btn-icon" onClick={togglePlay}>
+            {isPlaying ? (
+              <div
+                style={{
+                  width: 10,
+                  height: 10,
+                  background: "currentColor",
+                  borderRight: "4px solid transparent",
+                  borderLeft: "4px solid transparent",
+                }}
+              />
+            ) : (
+              <Icon name="Play" />
+            )}
+          </button>
+          <button className="btn btn-secondary btn-icon" onClick={toggleMute}>
+            <Icon name={isMuted ? "VolumeX" : "Volume"} />
+          </button>
+        </div>
         <div
           className="data-display"
           style={{

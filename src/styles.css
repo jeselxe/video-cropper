@@ -132,6 +132,11 @@ body {
     justify-content: space-between;
     gap: 1rem;
 }
+.toolbar-controls {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
 .control-group {
     display: flex;
     gap: 1rem;
