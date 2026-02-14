@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::process::Stdio;
 use tauri::api::process::Command;
 use tauri::async_runtime;
-use tauri::Window;
+use tauri::{AppHandle, Window};
+use tokio::fs;
 
 // Data Structures matching Plan Section 4.4
 #[derive(Debug, Serialize, Deserialize)]
@@ -136,4 +139,141 @@ pub async fn process_video(window: Window, args: ExportArgs) -> Result<String, S
     });
 
     Ok("Processing started".to_string())
+}
+
+#[tauri::command]
+pub async fn generate_video_proxy(
+    input_path: String,
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    let input = PathBuf::from(&input_path);
+
+    // Validate input exists first
+    if !input.exists() {
+        return Err(format!("Input file not found: {}", input_path));
+    }
+
+    let cache_dir = app_handle
+        .path_resolver()
+        .app_local_data_dir()
+        .ok_or("Failed to get app directory")?
+        .join("video_previews");
+
+    fs::create_dir_all(&cache_dir)
+        .await
+        .map_err(|e| format!("Cannot create cache dir: {}", e))?;
+
+    let metadata = fs::metadata(&input)
+        .await
+        .map_err(|e| format!("Cannot read file metadata: {}", e))?;
+    let modified = metadata.modified().map_err(|e| e.to_string())?;
+    let modified_secs = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let input_hash = format!("{:x}", md5::compute(&input_path));
+    let output_path = cache_dir.join(format!("{}_{}.mp4", input_hash, modified_secs));
+
+    if output_path.exists() {
+        println!("Using existing proxy: {:?}", output_path);
+        return Ok(output_path.to_str().unwrap().to_string());
+    }
+
+    println!("Starting FFmpeg transcoding...");
+    println!("Input: {}", input_path);
+    println!("Output: {:?}", output_path);
+
+    let args = &[
+        "-hwaccel",
+        "videotoolbox",
+        "-i",
+        &input_path,
+        "-c:v",
+        "h264_videotoolbox", // Hardware encoder
+        "-b:v",
+        "2M", // Bitrate instead of CRF for hardware
+        "-vf",
+        "scale=-2:720",
+        "-c:a",
+        "aac",
+        "-y",
+        &output_path.to_str().unwrap(),
+    ];
+    // Run FFmpeg and capture both stdout and stderr
+    // .args(&[
+    //     "-i",
+    //     &input_path,
+    //     "-c:v",
+    //     "libx264",
+    //     "-preset",
+    //     "ultrafast",
+    //     "-crf",
+    //     "28",
+    //     "-vf",
+    //     "scale=-2:720",
+    //     "-c:a",
+    //     "aac",
+    //     "-b:a",
+    //     "128k",
+    //     "-movflags",
+    //     "+faststart",
+    //     "-pix_fmt",
+    //     "yuv420p",
+    //     "-y",
+    //     output_path.to_str().unwrap(),
+    // ])
+    let output = tokio::process::Command::new("ffmpeg")
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| {
+            format!(
+                "Failed to execute FFmpeg: {}. Is FFmpeg installed and in PATH?",
+                e
+            )
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        println!("FFmpeg stderr: {}", stderr);
+        println!("FFmpeg stdout: {}", stdout);
+
+        return Err(format!(
+            "FFmpeg failed (code: {:?})\nStderr: {}\nStdout: {}",
+            output.status.code(),
+            stderr,
+            stdout
+        ));
+    }
+
+    // Verify output was created
+    if !output_path.exists() {
+        return Err("FFmpeg reported success but output file not found".to_string());
+    }
+
+    Ok(output_path.to_str().unwrap().to_string())
+}
+
+#[tauri::command]
+pub async fn get_video_codec(input_path: String) -> Result<String, String> {
+    let output = tokio::process::Command::new("ffprobe")
+        .args(&[
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            &input_path,
+        ])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    println!("Codec output: {:?}", output);
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }

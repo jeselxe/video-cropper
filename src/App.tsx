@@ -3,7 +3,8 @@ import { invoke, convertFileSrc } from "@tauri-apps/api/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/api/dialog";
 
-import VideoCropper from "./components/video-cropper";
+import { SmartVideoLoader } from "./components/smart-video-loader";
+// import VideoCropper from "./components/video-cropper";
 import TimelineSelector from "./components/timeline-selector";
 import Icon from "./components/icon";
 import LogModal from "./components/log-modal";
@@ -226,8 +227,8 @@ const App: React.FC = () => {
         <div className="app-body">
           {/* 1. Preview Area */}
           <div className="preview-area" ref={containerRef}>
-            <VideoCropper
-              videoUrl={videoUrl}
+            <SmartVideoLoader
+              originalVideoPath={videoPath}
               videoRef={videoRef}
               currentCrop={currentCrop}
               onCropChange={setCurrentCrop}

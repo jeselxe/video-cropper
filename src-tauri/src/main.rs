@@ -11,7 +11,12 @@ fn greet(name: &str) -> String {
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![ffmpeg::process_video, greet])
+        .invoke_handler(tauri::generate_handler![
+            ffmpeg::process_video,
+            greet,
+            ffmpeg::get_video_codec,
+            ffmpeg::generate_video_proxy
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
