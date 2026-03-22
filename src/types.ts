@@ -17,6 +17,11 @@ export interface ExportArgs {
   crop: CropArea;
 }
 
+export interface ConcatArgs {
+  input_paths: string[];
+  output_path: string;
+}
+
 export interface PreviewMetadata {
   duration: number;
   width: number;
@@ -31,3 +36,4 @@ export interface LogEntry {
 }
 export type DragHandle = "start" | "end" | null;
 export type CropHandle = "move" | "nw" | "ne" | "sw" | "se" | null;
+export type Tool = "crop" | "concat";

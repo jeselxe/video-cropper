@@ -64,6 +64,28 @@ body {
     align-items: center;
     gap: 0.5rem;
 }
+.tool-switcher {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    background: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius);
+    padding: 0.25rem;
+}
+.tool-tab {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    padding: 0.45rem 0.75rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 600;
+}
+.tool-tab.is-active {
+    background: var(--primary);
+    color: white;
+}
 
 .app-body {
     flex: 1;
@@ -125,6 +147,11 @@ body {
     flex-direction: column;
     gap: 1.5rem;
     min-height: 280px;
+}
+.empty-state {
+    display: flex;
+    justify-content: center;
+    color: var(--text-muted);
 }
 .toolbar {
     display: flex;
@@ -207,6 +234,90 @@ body {
     width: 40px;
     height: 40px;
     border-radius: 50%;
+}
+.btn-small {
+    height: 32px;
+    padding: 0 0.75rem;
+    font-size: 0.8rem;
+}
+
+.concat-layout {
+    display: grid;
+    grid-template-rows: 1fr auto;
+    gap: 1rem;
+}
+.concat-subtitle {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    margin-top: 0.35rem;
+}
+.concat-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    overflow: auto;
+}
+.concat-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    background: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius);
+    padding: 0.9rem 1rem;
+}
+.concat-item-main {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    min-width: 0;
+}
+.concat-item-index {
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    background: var(--primary);
+    color: white;
+    display: grid;
+    place-items: center;
+    font-weight: 700;
+    font-size: 0.8rem;
+    flex: 0 0 auto;
+}
+.concat-item-copy {
+    min-width: 0;
+}
+.concat-item-name {
+    font-weight: 600;
+    color: var(--text-main);
+}
+.concat-item-path {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 700px;
+}
+.concat-item-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex: 0 0 auto;
+}
+.concat-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    color: var(--text-muted);
+    text-align: center;
+}
+.concat-empty-note, .concat-help {
+    color: var(--text-muted);
+    font-size: 0.8rem;
 }
 
 /* ... (Timeline Styles) ... */

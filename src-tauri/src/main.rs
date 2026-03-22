@@ -55,6 +55,7 @@ fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             ffmpeg::process_video,
+            ffmpeg::concat_videos,
             ffmpeg::probe_video_metadata,
             ffmpeg::extract_preview_frame,
             get_file_size,

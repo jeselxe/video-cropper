@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
+use std::env;
+use std::fs;
+use std::process::Command as StdCommand;
 use tauri::api::process::Command;
 use tauri::async_runtime;
 use tauri::Window;
-use std::process::Command as StdCommand;
 
 // Data Structures matching Plan Section 4.4
 #[derive(Debug, Serialize, Deserialize)]
@@ -25,6 +27,12 @@ pub struct ExportArgs {
     output_path: String,
     selection: ClipSelection,
     crop: CropArea,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ConcatArgs {
+    input_paths: Vec<String>,
+    output_path: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -155,6 +163,95 @@ pub async fn extract_preview_frame(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn concat_videos(window: Window, args: ConcatArgs) -> Result<String, String> {
+    if args.input_paths.len() < 2 {
+        return Err("Select at least two videos to concatenate.".to_string());
+    }
+
+    let mut list_file_path = env::temp_dir();
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_millis();
+    list_file_path.push(format!("video-cropper-concat-{}.txt", timestamp));
+
+    let concat_manifest = args
+        .input_paths
+        .iter()
+        .map(|path| format!("file '{}'", path.replace('\'', "'\\''")))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    fs::write(&list_file_path, concat_manifest).map_err(|error| error.to_string())?;
+
+    let list_file_str = list_file_path.to_string_lossy().to_string();
+    let ffmpeg_args = vec![
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        &list_file_str,
+        "-c",
+        "copy",
+        "-y",
+        &args.output_path,
+    ];
+
+    let command = Command::new("ffmpeg").args(ffmpeg_args);
+    let (mut rx, _) = command.spawn().map_err(|e| e.to_string())?;
+
+    async_runtime::spawn(async move {
+        let mut exit_code: Option<i32> = None;
+        let mut command_error: Option<String> = None;
+        let mut last_progress_line: Option<String> = None;
+
+        while let Some(event) = rx.recv().await {
+            match event {
+                tauri::api::process::CommandEvent::Stdout(_) => {}
+                tauri::api::process::CommandEvent::Stderr(line) => {
+                    if last_progress_line.as_ref() != Some(&line) {
+                        let _ = window.emit("ffmpeg-progress", line.clone());
+                        last_progress_line = Some(line);
+                    }
+                }
+                tauri::api::process::CommandEvent::Terminated(payload) => {
+                    exit_code = payload.code;
+                    break;
+                }
+                tauri::api::process::CommandEvent::Error(err) => {
+                    command_error = Some(err.clone());
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        let _ = fs::remove_file(&list_file_path);
+
+        if let Some(err) = command_error {
+            let _ = window.emit("ffmpeg-error", format!("Tauri Command Error: {}", err));
+        } else if let Some(code) = exit_code {
+            if code == 0 {
+                let _ = window.emit("ffmpeg-finished", "Successfully concatenated videos");
+            } else {
+                let _ = window.emit(
+                    "ffmpeg-error",
+                    format!("FFmpeg exited with error code: {}", code),
+                );
+            }
+        } else {
+            let _ = window.emit(
+                "ffmpeg-error",
+                "FFmpeg process finished without explicit status code.",
+            );
+        }
+    });
+
+    Ok("Concatenation started".to_string())
 }
 
 #[tauri::command]

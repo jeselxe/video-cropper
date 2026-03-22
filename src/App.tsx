@@ -7,18 +7,23 @@ import VideoCropper from "./components/video-cropper";
 import TimelineSelector from "./components/timeline-selector";
 import Icon from "./components/icon";
 import LogModal from "./components/log-modal";
+import ConcatTool from "./components/concat-tool";
 
 import {
   ClipSelection,
+  ConcatArgs,
   CropArea,
   ExportArgs,
   LogEntry,
   PreviewMetadata,
+  Tool,
 } from "./types";
 import { formatTime } from "./utils/format";
 
 const App: React.FC = () => {
+  const [activeTool, setActiveTool] = useState<Tool>("crop");
   const [videoPath, setVideoPath] = useState<string | null>(null);
+  const [concatFiles, setConcatFiles] = useState<string[]>([]);
 
   // Metadata
   const [videoDuration, setVideoDuration] = useState<number>(0);
@@ -203,8 +208,20 @@ const App: React.FC = () => {
     isFrameRequestRunningRef.current = false;
   }, [pausePlayback]);
 
+  const resetCropState = useCallback(() => {
+    cleanupPreview();
+    setVideoPath(null);
+    setVideoDuration(0);
+    setVideoMeta({ width: 0, height: 0 });
+    setCurrentCrop({ x: 0, y: 0, width: 0, height: 0 });
+    setCurrentSelection({ start: 0, end: 0 });
+    setCurrentTime(0);
+    setIsLoadingMetadata(false);
+    setIsPlaying(false);
+  }, [cleanupPreview]);
+
   // --- File Loading ---
-  const selectFile = async () => {
+  const selectCropFile = async () => {
     try {
       const selected = await open({
         filters: [{ name: "Video", extensions: ["mp4", "mov", "mkv"] }],
@@ -259,6 +276,22 @@ const App: React.FC = () => {
     }
   };
 
+  const selectConcatFiles = async () => {
+    try {
+      const selected = await open({
+        filters: [{ name: "Video", extensions: ["mp4", "mov", "mkv", "lrv"] }],
+        multiple: true,
+      });
+
+      if (Array.isArray(selected) && selected.length > 0) {
+        setConcatFiles((prev) => [...prev, ...selected]);
+        addLog(`Added ${selected.length} file(s) to concat queue.`, "info");
+      }
+    } catch (e) {
+      addLog("Failed to open files: " + e, "error");
+    }
+  };
+
   // --- Export ---
   const handleExport = async () => {
     if (!videoPath) return;
@@ -296,6 +329,38 @@ const App: React.FC = () => {
     } catch (e) {
       setIsProcessing(false);
       addLog(`Export start failed: ${e}`, "error");
+    }
+  };
+
+  const handleConcatExport = async () => {
+    if (concatFiles.length < 2) {
+      addLog("Select at least two files to concatenate.", "error");
+      return;
+    }
+
+    try {
+      const outputPath = await save({
+        defaultPath: "concatenated_video.mp4",
+        filters: [{ name: "Video", extensions: ["mp4"] }],
+      });
+
+      if (!outputPath) {
+        addLog("Concat cancelled", "info");
+        return;
+      }
+
+      setIsProcessing(true);
+      addLog(`Starting concat to ${outputPath}`, "info");
+
+      const args: ConcatArgs = {
+        input_paths: concatFiles,
+        output_path: outputPath,
+      };
+
+      await invoke("concat_videos", { args });
+    } catch (e) {
+      setIsProcessing(false);
+      addLog(`Concat start failed: ${e}`, "error");
     }
   };
 
@@ -365,7 +430,7 @@ const App: React.FC = () => {
     const unlisten = [
       listen<string>("ffmpeg-progress", (e) => addLog(e.payload, "progress")),
       listen<string>("ffmpeg-finished", () => {
-        addLog("Export completed successfully!", "success");
+        addLog("Operation completed successfully!", "success");
         setIsProcessing(false);
       }),
       listen<string>("ffmpeg-error", (e) => {
@@ -395,123 +460,172 @@ const App: React.FC = () => {
   const cropInfo = `${Math.round(currentCrop.width)}×${Math.round(currentCrop.height)}`;
 
   const isReady = videoPath && videoMeta.width > 0 && !isLoadingMetadata;
+  const statusFileLabel =
+    activeTool === "crop"
+      ? videoPath
+        ? videoPath.split(/[/\\]/).pop()
+        : ""
+      : concatFiles.length > 0
+        ? `${concatFiles.length} clip(s) queued`
+        : "";
 
   return (
     <>
       <div className="app-container">
         <header className="app-header">
           <div className="app-title">
-            <Icon name="Crop" />
-            <span>Trim & Crop</span>
+            <Icon name={activeTool === "crop" ? "Crop" : "List"} />
+            <span>Video Tools</span>
           </div>
-          <button className="btn btn-secondary" onClick={selectFile}>
-            <Icon name="Upload" /> Open Video
-          </button>
+          <div className="tool-switcher">
+            <button
+              className={`tool-tab ${activeTool === "crop" ? "is-active" : ""}`}
+              onClick={() => setActiveTool("crop")}
+            >
+              Trim & Crop
+            </button>
+            <button
+              className={`tool-tab ${activeTool === "concat" ? "is-active" : ""}`}
+              onClick={() => {
+                resetCropState();
+                setActiveTool("concat");
+              }}
+            >
+              Concat
+            </button>
+          </div>
+          {activeTool === "crop" ? (
+            <button className="btn btn-secondary" onClick={selectCropFile}>
+              <Icon name="Upload" /> Open Video
+            </button>
+          ) : (
+            <button className="btn btn-secondary" onClick={selectConcatFiles}>
+              <Icon name="Upload" /> Add Videos
+            </button>
+          )}
         </header>
 
         <div className="app-body">
-          {/* 1. Preview Area */}
-          <div className="preview-area" ref={containerRef}>
-            <VideoCropper
-              hasPreview={!!videoPath}
-              canvasRef={canvasRef}
-              currentCrop={currentCrop}
-              onCropChange={setCurrentCrop}
-              videoWidth={videoMeta.width}
-              videoHeight={videoMeta.height}
-              containerSize={containerSize}
-              isLoading={isLoadingMetadata}
-            />
-            {/* Overlay for loading state */}
-            {videoPath && isLoadingMetadata && (
-              <div
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  backgroundColor: "rgba(0,0,0,0.8)",
-                  zIndex: 50,
-                  color: "white",
-                }}
-              >
-                <Icon name="Loader" width={48} height={48} />
-                <span style={{ marginTop: "1rem", fontSize: "1.2rem" }}>
-                  Loading Mediabunny preview...
-                </span>
-                <span
-                  style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}
-                >
-                  Reading metadata and preparing frame-accurate canvas rendering.
-                </span>
-              </div>
-            )}
-          </div>
-
-          {/* 2. Controls Area */}
-          <div className="editor-panel">
-            {isReady ? (
-              <>
-                <TimelineSelector
-                  duration={videoDuration}
-                  selection={currentSelection}
-                  onSelectionChange={setCurrentSelection}
-                  currentTime={currentTime}
-                  isPlaying={isPlaying}
-                  isMuted={isMuted}
-                  onSeek={seekTo}
-                  onTogglePlay={togglePlay}
-                  onToggleMute={toggleMute}
+          {activeTool === "crop" ? (
+            <>
+              <div className="preview-area" ref={containerRef}>
+                <VideoCropper
+                  hasPreview={!!videoPath}
+                  canvasRef={canvasRef}
+                  currentCrop={currentCrop}
+                  onCropChange={setCurrentCrop}
+                  videoWidth={videoMeta.width}
+                  videoHeight={videoMeta.height}
+                  containerSize={containerSize}
+                  isLoading={isLoadingMetadata}
                 />
-
-                <div className="toolbar" style={{ marginTop: "auto" }}>
-                  <div className="control-group">
-                    <div className="data-display">
-                      <span className="data-label">Dimensions</span>
-                      <span className="data-value">{cropInfo}</span>
-                    </div>
-                    <div className="data-display">
-                      <span className="data-label">Duration</span>
-                      <span className="data-value">
-                        {formatTime(
-                          currentSelection.end - currentSelection.start,
-                        )}
-                      </span>
-                    </div>
-                  </div>
-
-                  <button
-                    className="btn btn-success"
-                    onClick={handleExport}
-                    disabled={isProcessing}
+                {videoPath && isLoadingMetadata && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      backgroundColor: "rgba(0,0,0,0.8)",
+                      zIndex: 50,
+                      color: "white",
+                    }}
                   >
-                    {isProcessing ? (
-                      <Icon name="Loader" />
-                    ) : (
-                      <Icon name="Download" />
-                    )}
-                    {isProcessing ? "Exporting..." : "Export"}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "center",
-                  color: "var(--text-muted)",
-                }}
-              >
-                {videoPath
-                  ? isLoadingMetadata
-                    ? "Loading video data..."
-                    : "Video metadata failed to load or is unavailable."
-                  : "No video selected"}
+                    <Icon name="Loader" width={48} height={48} />
+                    <span style={{ marginTop: "1rem", fontSize: "1.2rem" }}>
+                      Loading preview...
+                    </span>
+                    <span
+                      style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}
+                    >
+                      Reading metadata and preparing frame-accurate canvas
+                      rendering.
+                    </span>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+
+              <div className="editor-panel">
+                {isReady ? (
+                  <>
+                    <TimelineSelector
+                      duration={videoDuration}
+                      selection={currentSelection}
+                      onSelectionChange={setCurrentSelection}
+                      currentTime={currentTime}
+                      isPlaying={isPlaying}
+                      isMuted={isMuted}
+                      onSeek={seekTo}
+                      onTogglePlay={togglePlay}
+                      onToggleMute={toggleMute}
+                    />
+
+                    <div className="toolbar" style={{ marginTop: "auto" }}>
+                      <div className="control-group">
+                        <div className="data-display">
+                          <span className="data-label">Dimensions</span>
+                          <span className="data-value">{cropInfo}</span>
+                        </div>
+                        <div className="data-display">
+                          <span className="data-label">Duration</span>
+                          <span className="data-value">
+                            {formatTime(
+                              currentSelection.end - currentSelection.start,
+                            )}
+                          </span>
+                        </div>
+                      </div>
+
+                      <button
+                        className="btn btn-success"
+                        onClick={handleExport}
+                        disabled={isProcessing}
+                      >
+                        {isProcessing ? (
+                          <Icon name="Loader" />
+                        ) : (
+                          <Icon name="Download" />
+                        )}
+                        {isProcessing ? "Exporting..." : "Export"}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="empty-state">
+                    {videoPath
+                      ? isLoadingMetadata
+                        ? "Loading video data..."
+                        : "Video metadata failed to load or is unavailable."
+                      : "No video selected"}
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <ConcatTool
+              files={concatFiles}
+              isProcessing={isProcessing}
+              onAddFiles={selectConcatFiles}
+              onMoveFile={(index, direction) => {
+                setConcatFiles((prev) => {
+                  const targetIndex = index + direction;
+                  if (targetIndex < 0 || targetIndex >= prev.length) return prev;
+                  const next = [...prev];
+                  [next[index], next[targetIndex]] = [
+                    next[targetIndex],
+                    next[index],
+                  ];
+                  return next;
+                });
+              }}
+              onRemoveFile={(index) => {
+                setConcatFiles((prev) => prev.filter((_, i) => i !== index));
+              }}
+              onExport={handleConcatExport}
+            />
+          )}
         </div>
 
         {/* 3. Footer Status Bar */}
@@ -528,7 +642,7 @@ const App: React.FC = () => {
             </span>
           </button>
           <div style={{ opacity: 0.5 }}>
-            {videoPath ? videoPath.split(/[/\\]/).pop() : ""}
+            {statusFileLabel}
           </div>
         </footer>
       </div>

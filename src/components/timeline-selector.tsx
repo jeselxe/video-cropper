@@ -196,7 +196,7 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
             className="btn btn-secondary btn-icon"
             onClick={onToggleMute}
             disabled
-            title="Audio preview is not available in the Mediabunny canvas preview yet."
+            title="Audio preview is not available in the backend frame preview yet."
           >
             <Icon name={isMuted ? "VolumeX" : "Volume"} />
           </button>
