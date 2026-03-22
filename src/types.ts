@@ -17,6 +17,12 @@ export interface ExportArgs {
   crop: CropArea;
 }
 
+export interface PreviewMetadata {
+  duration: number;
+  width: number;
+  height: number;
+}
+
 export interface LogEntry {
   id: number;
   timestamp: string;

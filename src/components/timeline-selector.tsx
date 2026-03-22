@@ -8,7 +8,12 @@ interface TimelineSelectorProps {
   duration: number;
   selection: ClipSelection;
   onSelectionChange: (newSelection: ClipSelection) => void;
-  videoRef: React.RefObject<HTMLVideoElement | null>;
+  currentTime: number;
+  isPlaying: boolean;
+  isMuted: boolean;
+  onSeek: (time: number) => void;
+  onTogglePlay: () => void;
+  onToggleMute: () => void;
 }
 
 // Define step sizes for different modifier key combinations
@@ -22,71 +27,17 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
   duration,
   selection,
   onSelectionChange,
-  videoRef,
+  currentTime,
+  isPlaying,
+  isMuted,
+  onSeek,
+  onTogglePlay,
+  onToggleMute,
 }) => {
   const timelineRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [dragHandle, setDragHandle] = useState<DragHandle>(null);
-  const [currentTime, setCurrentTime] = useState<number>(0);
-  const [isPlaying, setIsPlaying] = useState(false);
   const [focusedHandle, setFocusedHandle] = useState<DragHandle>(null);
-  const [isMuted, setIsMuted] = useState(true); // NEW: Mute state
-
-  // --- Mute Sync/Initialization ---
-  useEffect(() => {
-    const video = videoRef.current;
-    if (video) {
-      // Initialize state based on the video element's current state
-      setIsMuted(video.muted);
-    }
-  }, [videoRef]);
-
-  // ... [Existing useEffect for video playback sync remains unchanged] ...
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    const onPlay = () => setIsPlaying(true);
-    const onPause = () => setIsPlaying(false);
-    const onTimeUpdate = () => {
-      setCurrentTime(video.currentTime);
-      // Auto-pause if we hit the end of selection
-      if (video.currentTime >= selection.end - 0.05 && !video.paused) {
-        video.pause();
-        video.currentTime = selection.end;
-      }
-    };
-
-    video.addEventListener("play", onPlay);
-    video.addEventListener("pause", onPause);
-    video.addEventListener("timeupdate", onTimeUpdate);
-
-    return () => {
-      video.removeEventListener("play", onPlay);
-      video.removeEventListener("pause", onPause);
-      video.removeEventListener("timeupdate", onTimeUpdate);
-    };
-  }, [videoRef, selection.end]);
-
-  const togglePlay = () => {
-    if (videoRef.current) {
-      if (videoRef.current.paused) {
-        if (videoRef.current.currentTime >= selection.end - 0.1) {
-          videoRef.current.currentTime = selection.start;
-        }
-        videoRef.current.play();
-      } else {
-        videoRef.current.pause();
-      }
-    }
-  };
-  const toggleMute = () => {
-    if (videoRef.current) {
-      const newState = !videoRef.current.muted;
-      videoRef.current.muted = newState;
-      setIsMuted(newState);
-    }
-  };
 
   // Convert helpers
   const percentToSeconds = (percent: number) => (percent / 100) * duration;
@@ -147,17 +98,12 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
         newSelection.end !== selection.end
       ) {
         onSelectionChange(newSelection);
-
-        // UX: Seek video to the new position
-        if (videoRef.current) {
-          videoRef.current.currentTime = newTime;
-        }
+        onSeek(newTime);
       }
     },
-    [selection, duration, onSelectionChange, videoRef],
+    [selection, duration, onSelectionChange, onSeek],
   );
 
-  // ... [Dragging Logic (handleMouseDown, handleMouseMove, handleMouseUp) remains unchanged] ...
   const handleMouseDown = (
     e: React.MouseEvent<HTMLDivElement>,
     handle: DragHandle,
@@ -170,9 +116,7 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
 
     setIsDragging(true);
     setDragHandle(handle);
-    if (videoRef.current && !videoRef.current.paused) {
-      videoRef.current.pause();
-    }
+    if (isPlaying) onTogglePlay();
   };
 
   const handleMouseMove = useCallback(
@@ -196,12 +140,9 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
       }
 
       onSelectionChange(newSelection);
-
-      if (videoRef.current) {
-        videoRef.current.currentTime = time;
-      }
+      onSeek(time);
     },
-    [isDragging, dragHandle, duration, selection, onSelectionChange, videoRef],
+    [isDragging, dragHandle, duration, selection, onSelectionChange, onSeek],
   );
 
   const handleMouseUp = useCallback(() => {
@@ -220,16 +161,12 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
     };
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
-  // ... [handleTrackClick remains unchanged] ...
   const handleTrackClick = (e: React.MouseEvent) => {
     if (!timelineRef.current || duration === 0) return;
     const rect = timelineRef.current.getBoundingClientRect();
     const percent = ((e.clientX - rect.left) / rect.width) * 100;
     const time = percentToSeconds(clamp(percent, 0, 100));
-
-    if (videoRef.current) {
-      videoRef.current.currentTime = time;
-    }
+    onSeek(time);
   };
 
   const startPct = secondsToPercent(selection.start);
@@ -240,7 +177,7 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
     <div className="timeline-wrapper">
       <div className="toolbar" style={{ marginBottom: "0.5rem" }}>
         <div className="toolbar-controls">
-          <button className="btn btn-secondary btn-icon" onClick={togglePlay}>
+          <button className="btn btn-secondary btn-icon" onClick={onTogglePlay}>
             {isPlaying ? (
               <div
                 style={{
@@ -255,7 +192,12 @@ const TimelineSelector: React.FC<TimelineSelectorProps> = ({
               <Icon name="Play" />
             )}
           </button>
-          <button className="btn btn-secondary btn-icon" onClick={toggleMute}>
+          <button
+            className="btn btn-secondary btn-icon"
+            onClick={onToggleMute}
+            disabled
+            title="Audio preview is not available in the Mediabunny canvas preview yet."
+          >
             <Icon name={isMuted ? "VolumeX" : "Volume"} />
           </button>
         </div>

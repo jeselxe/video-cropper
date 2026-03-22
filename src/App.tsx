@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke, convertFileSrc } from "@tauri-apps/api/tauri";
+import { invoke } from "@tauri-apps/api/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/api/dialog";
 
@@ -8,12 +8,17 @@ import TimelineSelector from "./components/timeline-selector";
 import Icon from "./components/icon";
 import LogModal from "./components/log-modal";
 
-import { ClipSelection, CropArea, ExportArgs, LogEntry } from "./types";
+import {
+  ClipSelection,
+  CropArea,
+  ExportArgs,
+  LogEntry,
+  PreviewMetadata,
+} from "./types";
 import { formatTime } from "./utils/format";
 
 const App: React.FC = () => {
   const [videoPath, setVideoPath] = useState<string | null>(null);
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
 
   // Metadata
   const [videoDuration, setVideoDuration] = useState<number>(0);
@@ -39,11 +44,22 @@ const App: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isLogModalOpen, setIsLogModalOpen] = useState(false);
 
-  // Metadata loading state
   const [isLoadingMetadata, setIsLoadingMetadata] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isMuted, setIsMuted] = useState(true);
 
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const currentTimeRef = useRef(0);
+  const selectionEndRef = useRef(0);
+  const playbackFrameRef = useRef<number | null>(null);
+  const lastPlaybackTickRef = useRef<number | null>(null);
+  const renderSequenceRef = useRef(0);
+  const lastPreviewRenderRef = useRef<number>(0);
+  const queuedFrameTimeRef = useRef<number | null>(null);
+  const queuedFrameForceRef = useRef(false);
+  const isFrameRequestRunningRef = useRef(false);
 
   // --- Helper: Add Log ---
   const addLog = useCallback((msg: string, type: LogEntry["type"]) => {
@@ -73,6 +89,120 @@ const App: React.FC = () => {
     return () => window.removeEventListener("resize", updateSize);
   }, []);
 
+  const pausePlayback = useCallback(() => {
+    if (playbackFrameRef.current !== null) {
+      cancelAnimationFrame(playbackFrameRef.current);
+      playbackFrameRef.current = null;
+    }
+    lastPlaybackTickRef.current = null;
+    setIsPlaying(false);
+  }, []);
+
+  const drawFrame = useCallback(
+    async (uiTime: number, force = false) => {
+      try {
+        const canvas = canvasRef.current;
+
+        if (!videoPath || !canvas) return;
+
+        if (!force && videoMeta.width > 0) {
+          const now = performance.now();
+          if (now - lastPreviewRenderRef.current < 220) return;
+          lastPreviewRenderRef.current = now;
+        }
+
+        const sequence = ++renderSequenceRef.current;
+        const timestamp = Math.min(Math.max(uiTime, 0), videoDuration);
+        const bytes = await invoke<number[]>("extract_preview_frame", {
+          path: videoPath,
+          time: timestamp,
+          maxWidth: 960,
+        });
+
+        if (renderSequenceRef.current !== sequence) return;
+
+        const blob = new Blob([new Uint8Array(bytes)], { type: "image/jpeg" });
+        const imageUrl = URL.createObjectURL(blob);
+        const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+          const element = new Image();
+          element.onload = () => resolve(element);
+          element.onerror = () =>
+            reject(new Error("Failed to decode preview frame image."));
+          element.src = imageUrl;
+        });
+
+        if (renderSequenceRef.current !== sequence) {
+          URL.revokeObjectURL(imageUrl);
+          return;
+        }
+
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          URL.revokeObjectURL(imageUrl);
+          return;
+        }
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(imageUrl);
+      } catch (error) {
+        if (force) {
+          const message = error instanceof Error ? error.message : String(error);
+          addLog(`Preview frame failed: ${message}`, "error");
+        }
+      }
+    },
+    [addLog, videoDuration, videoMeta.width, videoPath],
+  );
+
+  const pumpFrameQueue = useCallback(async () => {
+    if (isFrameRequestRunningRef.current) return;
+
+    isFrameRequestRunningRef.current = true;
+
+    try {
+      while (queuedFrameTimeRef.current !== null) {
+        const nextTime = queuedFrameTimeRef.current;
+        const force = queuedFrameForceRef.current;
+
+        queuedFrameTimeRef.current = null;
+        queuedFrameForceRef.current = false;
+
+        await drawFrame(nextTime, force);
+      }
+    } finally {
+      isFrameRequestRunningRef.current = false;
+    }
+  }, [drawFrame]);
+
+  const requestFrame = useCallback(
+    (time: number, force = false) => {
+      queuedFrameTimeRef.current = time;
+      queuedFrameForceRef.current = queuedFrameForceRef.current || force;
+      void pumpFrameQueue();
+    },
+    [pumpFrameQueue],
+  );
+
+  const seekTo = useCallback(
+    (time: number) => {
+      const nextTime = Math.max(0, Math.min(time, videoDuration));
+      currentTimeRef.current = nextTime;
+      setCurrentTime(nextTime);
+      requestFrame(nextTime, true);
+    },
+    [requestFrame, videoDuration],
+  );
+
+  const cleanupPreview = useCallback(() => {
+    pausePlayback();
+    renderSequenceRef.current += 1;
+    lastPreviewRenderRef.current = 0;
+    queuedFrameTimeRef.current = null;
+    queuedFrameForceRef.current = false;
+    isFrameRequestRunningRef.current = false;
+  }, [pausePlayback]);
+
   // --- File Loading ---
   const selectFile = async () => {
     try {
@@ -81,47 +211,51 @@ const App: React.FC = () => {
         multiple: false,
       });
       if (typeof selected === "string") {
+        cleanupPreview();
         setVideoPath(selected);
-        setVideoUrl(convertFileSrc(selected));
         setLogs([]); // Clear logs on new file
         addLog("Loaded file: " + selected, "info");
-        // Set loading state when starting to load a new video
         setIsLoadingMetadata(true);
-      }
-    } catch (e) {
-      addLog("Failed to open file: " + e, "error");
-    }
-  };
 
-  const onMetadataAvailable = () => {
-    if (videoRef.current) {
-      const { duration, videoWidth, videoHeight } = videoRef.current;
+        const metadata = await invoke<PreviewMetadata>("probe_video_metadata", {
+          path: selected,
+        });
 
-      // Only proceed if duration and dimensions are valid
-      if (
-        videoWidth > 0 &&
-        videoHeight > 0 &&
-        duration > 0 &&
-        isLoadingMetadata
-      ) {
-        setVideoDuration(duration);
-        setVideoMeta({ width: videoWidth, height: videoHeight });
-
-        // Reset tools to defaults
-        setCurrentCrop({ x: 0, y: 0, width: videoWidth, height: videoHeight });
-        setCurrentSelection({ start: 0, end: duration });
+        setVideoDuration(metadata.duration);
+        setVideoMeta({ width: metadata.width, height: metadata.height });
+        setCurrentCrop({
+          x: 0,
+          y: 0,
+          width: metadata.width,
+          height: metadata.height,
+        });
+        setCurrentSelection({ start: 0, end: metadata.duration });
+        selectionEndRef.current = metadata.duration;
+        currentTimeRef.current = 0;
+        setCurrentTime(0);
+        setIsMuted(true);
+        setIsLoadingMetadata(false);
         addLog(
-          `Metadata: ${videoWidth}x${videoHeight}, ${duration.toFixed(2)}s. Ready for edit.`,
+          `Metadata: ${metadata.width}x${metadata.height}, ${metadata.duration.toFixed(2)}s. Ready for edit.`,
           "info",
         );
-        setIsLoadingMetadata(false); // Finished loading
-      } else if (isLoadingMetadata) {
-        // Log a progress message if data is still incomplete
         addLog(
-          "Video metadata pending. Dimensions or duration not yet available...",
-          "progress",
+          "Preview uses backend FFmpeg frame extraction. Audio preview is currently disabled.",
+          "info",
         );
+        requestFrame(0, true);
       }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setVideoPath(null);
+      setVideoDuration(0);
+      setVideoMeta({ width: 0, height: 0 });
+      setCurrentCrop({ x: 0, y: 0, width: 0, height: 0 });
+      setCurrentSelection({ start: 0, end: 0 });
+      setCurrentTime(0);
+      setIsLoadingMetadata(false);
+      cleanupPreview();
+      addLog("Failed to open file: " + message, "error");
     }
   };
 
@@ -165,20 +299,66 @@ const App: React.FC = () => {
     }
   };
 
-  const handleVideoLoadError = useCallback(
-    (message: string) => {
-      // Clear all video related states on error
-      setVideoPath(null);
-      setVideoUrl(null);
-      setVideoDuration(0);
-      setIsProcessing(false);
-      setIsLoadingMetadata(false);
+  const toggleMute = useCallback(() => {
+    setIsMuted((value) => !value);
+  }, []);
 
-      // Set the main app error state
-      addLog(`Video load failed: ${message}`, "error");
+  const playbackStep = useCallback(
+    (timestamp: number) => {
+      const lastTick = lastPlaybackTickRef.current ?? timestamp;
+      const deltaSeconds = (timestamp - lastTick) / 1000;
+      lastPlaybackTickRef.current = timestamp;
+
+      const nextTime = currentTimeRef.current + deltaSeconds;
+
+      if (nextTime >= selectionEndRef.current) {
+        seekTo(selectionEndRef.current);
+        pausePlayback();
+        return;
+      }
+
+      currentTimeRef.current = nextTime;
+      setCurrentTime(nextTime);
+      requestFrame(nextTime);
+      playbackFrameRef.current = requestAnimationFrame(playbackStep);
     },
-    [addLog],
+    [pausePlayback, requestFrame, seekTo],
   );
+
+  const togglePlay = useCallback(() => {
+    if (!videoPath) return;
+
+    if (isPlaying) {
+      pausePlayback();
+      return;
+    }
+
+    if (currentTimeRef.current >= selectionEndRef.current - 0.1) {
+      seekTo(currentSelection.start);
+    }
+
+    selectionEndRef.current = currentSelection.end;
+    setIsPlaying(true);
+    lastPlaybackTickRef.current = null;
+    requestFrame(currentTimeRef.current, true);
+    playbackFrameRef.current = requestAnimationFrame(playbackStep);
+  }, [
+    currentSelection.start,
+    currentSelection.end,
+    isPlaying,
+    pausePlayback,
+    playbackStep,
+    requestFrame,
+    seekTo,
+    videoPath,
+  ]);
+
+  useEffect(() => {
+    selectionEndRef.current = currentSelection.end;
+    if (currentTimeRef.current > currentSelection.end) {
+      seekTo(currentSelection.end);
+    }
+  }, [currentSelection.end, seekTo]);
 
   // --- Listeners ---
   useEffect(() => {
@@ -198,6 +378,12 @@ const App: React.FC = () => {
     };
   }, [addLog]);
 
+  useEffect(() => {
+    return () => {
+      cleanupPreview();
+    };
+  }, [cleanupPreview]);
+
   // Derived display values
   const lastLog =
     logs.length > 0
@@ -208,7 +394,7 @@ const App: React.FC = () => {
         };
   const cropInfo = `${Math.round(currentCrop.width)}×${Math.round(currentCrop.height)}`;
 
-  const isReady = videoUrl && videoMeta.width > 0 && !isLoadingMetadata;
+  const isReady = videoPath && videoMeta.width > 0 && !isLoadingMetadata;
 
   return (
     <>
@@ -227,19 +413,17 @@ const App: React.FC = () => {
           {/* 1. Preview Area */}
           <div className="preview-area" ref={containerRef}>
             <VideoCropper
-              videoUrl={videoUrl}
-              videoRef={videoRef}
+              hasPreview={!!videoPath}
+              canvasRef={canvasRef}
               currentCrop={currentCrop}
               onCropChange={setCurrentCrop}
               videoWidth={videoMeta.width}
               videoHeight={videoMeta.height}
               containerSize={containerSize}
-              onMetadataAvailable={onMetadataAvailable} // Use new callback
-              isLoading={isLoadingMetadata} // Pass loading state
-              onLoadError={handleVideoLoadError}
+              isLoading={isLoadingMetadata}
             />
             {/* Overlay for loading state */}
-            {videoUrl && isLoadingMetadata && (
+            {videoPath && isLoadingMetadata && (
               <div
                 style={{
                   position: "absolute",
@@ -255,12 +439,12 @@ const App: React.FC = () => {
               >
                 <Icon name="Loader" width={48} height={48} />
                 <span style={{ marginTop: "1rem", fontSize: "1.2rem" }}>
-                  Loading video metadata...
+                  Loading Mediabunny preview...
                 </span>
                 <span
                   style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}
                 >
-                  Waiting for browser to parse video dimensions and duration.
+                  Reading metadata and preparing frame-accurate canvas rendering.
                 </span>
               </div>
             )}
@@ -274,7 +458,12 @@ const App: React.FC = () => {
                   duration={videoDuration}
                   selection={currentSelection}
                   onSelectionChange={setCurrentSelection}
-                  videoRef={videoRef}
+                  currentTime={currentTime}
+                  isPlaying={isPlaying}
+                  isMuted={isMuted}
+                  onSeek={seekTo}
+                  onTogglePlay={togglePlay}
+                  onToggleMute={toggleMute}
                 />
 
                 <div className="toolbar" style={{ marginTop: "auto" }}>
@@ -315,7 +504,7 @@ const App: React.FC = () => {
                   color: "var(--text-muted)",
                 }}
               >
-                {videoUrl
+                {videoPath
                   ? isLoadingMetadata
                     ? "Loading video data..."
                     : "Video metadata failed to load or is unavailable."

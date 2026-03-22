@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use tauri::api::process::Command;
 use tauri::async_runtime;
 use tauri::Window;
+use std::process::Command as StdCommand;
 
 // Data Structures matching Plan Section 4.4
 #[derive(Debug, Serialize, Deserialize)]
@@ -25,6 +26,137 @@ pub struct ExportArgs {
     selection: ClipSelection,
     crop: CropArea,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PreviewMetadata {
+    duration: f64,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct FFprobeResponse {
+    streams: Vec<FFprobeStream>,
+    format: FFprobeFormat,
+}
+
+#[derive(Debug, Deserialize)]
+struct FFprobeStream {
+    width: Option<u32>,
+    height: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FFprobeFormat {
+    duration: Option<String>,
+}
+
+#[tauri::command]
+pub async fn probe_video_metadata(path: String) -> Result<PreviewMetadata, String> {
+    async_runtime::spawn_blocking(move || {
+        let output = StdCommand::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height:format=duration",
+                "-of",
+                "json",
+                &path,
+            ])
+            .output()
+            .map_err(|error| error.to_string())?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("ffprobe failed: {}", stderr.trim()));
+        }
+
+        let response: FFprobeResponse =
+            serde_json::from_slice(&output.stdout).map_err(|error| error.to_string())?;
+
+        let stream = response
+            .streams
+            .first()
+            .ok_or_else(|| "No video stream found in file.".to_string())?;
+
+        let width = stream
+            .width
+            .ok_or_else(|| "Video width is unavailable.".to_string())?;
+        let height = stream
+            .height
+            .ok_or_else(|| "Video height is unavailable.".to_string())?;
+        let duration = response
+            .format
+            .duration
+            .as_deref()
+            .ok_or_else(|| "Video duration is unavailable.".to_string())?
+            .parse::<f64>()
+            .map_err(|error| error.to_string())?;
+
+        Ok(PreviewMetadata {
+            duration,
+            width,
+            height,
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn extract_preview_frame(
+    path: String,
+    time: f64,
+    max_width: u32,
+) -> Result<Vec<u8>, String> {
+    async_runtime::spawn_blocking(move || {
+        let timestamp = format!("{:.3}", time.max(0.0));
+        let scale_filter = format!(
+            "scale={max_width}:-2:force_original_aspect_ratio=decrease"
+        );
+
+        let output = StdCommand::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-ss",
+                &timestamp,
+                "-i",
+                &path,
+                "-frames:v",
+                "1",
+                "-vf",
+                &scale_filter,
+                "-q:v",
+                "5",
+                "-f",
+                "image2pipe",
+                "-vcodec",
+                "mjpeg",
+                "pipe:1",
+            ])
+            .output()
+            .map_err(|error| error.to_string())?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("ffmpeg frame extraction failed: {}", stderr.trim()));
+        }
+
+        if output.stdout.is_empty() {
+            return Err("ffmpeg produced an empty preview frame.".to_string());
+        }
+
+        Ok(output.stdout)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
 pub async fn process_video(window: Window, args: ExportArgs) -> Result<String, String> {
     println!("Processing video: {:?}", args);

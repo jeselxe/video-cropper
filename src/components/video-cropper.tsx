@@ -4,29 +4,25 @@ import { clamp } from "../utils";
 import Icon from "./icon";
 
 interface VideoCropperProps {
-  videoUrl: string | null;
-  videoRef: React.RefObject<HTMLVideoElement | null>;
+  hasPreview: boolean;
+  canvasRef: React.RefObject<HTMLCanvasElement | null>;
   currentCrop: CropArea;
   onCropChange: (newCrop: CropArea) => void;
   videoWidth: number;
   videoHeight: number;
   containerSize: { width: number; height: number };
-  onMetadataAvailable: () => void; // UPDATED PROP
-  isLoading: boolean; // NEW PROP
-  onLoadError: (error: string) => void; // NEW PROP
+  isLoading: boolean;
 }
 
 const VideoCropper: React.FC<VideoCropperProps> = ({
-  videoUrl,
-  videoRef,
+  hasPreview,
+  canvasRef,
   currentCrop,
   onCropChange,
   videoWidth,
   videoHeight,
   containerSize,
-  onMetadataAvailable,
   isLoading,
-  onLoadError,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
@@ -56,7 +52,7 @@ const VideoCropper: React.FC<VideoCropperProps> = ({
 
   // --- Drag Logic ---
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (!videoUrl) return;
+    if (!hasPreview) return;
     e.preventDefault();
     e.stopPropagation();
 
@@ -197,44 +193,13 @@ const VideoCropper: React.FC<VideoCropperProps> = ({
     };
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
-  const handleVideoError = (
-    e: React.SyntheticEvent<HTMLVideoElement, Event>,
-  ) => {
-    const videoElement = e.currentTarget;
-    let errorMessage = "Unknown video error.";
-
-    if (videoElement.error) {
-      switch (videoElement.error.code) {
-        case videoElement.error.MEDIA_ERR_ABORTED:
-          errorMessage = "Video fetch cancelled by user.";
-          break;
-        case videoElement.error.MEDIA_ERR_NETWORK:
-          errorMessage = "Video download failed due to a network error.";
-          break;
-        case videoElement.error.MEDIA_ERR_DECODE:
-          errorMessage =
-            "Video playback aborted due to a decoding error (invalid format or corrupted file).";
-          break;
-        case videoElement.error.MEDIA_ERR_SRC_NOT_SUPPORTED:
-          errorMessage =
-            "Video format not supported or file could not be found.";
-          break;
-        default:
-          errorMessage = `Video error (Code: ${videoElement.error.code}).`;
-      }
-    }
-
-    // Notify parent and set local state
-    onLoadError(errorMessage);
-  };
-
   const cursorClass = isDragging
     ? dragHandle === "move"
       ? "cursor-grabbing"
       : `cursor-${dragHandle}-resize`
     : "";
 
-  if (!videoUrl) {
+  if (!hasPreview) {
     return (
       <div className="video-placeholder">
         <Icon name="Video" />
@@ -248,17 +213,13 @@ const VideoCropper: React.FC<VideoCropperProps> = ({
       className="video-wrapper"
       style={{ width: renderWidth, height: renderHeight }}
     >
-      <video
-        ref={videoRef}
-        src={videoUrl}
-        onLoadedMetadata={onMetadataAvailable} // Primary event
-        onCanPlay={onMetadataAvailable} // Fallback event for heavy videos
-        onError={handleVideoError}
+      <canvas
+        ref={canvasRef}
         className="video-player"
-        muted
+        width={Math.max(1, videoWidth)}
+        height={Math.max(1, videoHeight)}
       />
 
-      {/* Cropper only visible if metadata is loaded (videoWidth > 0) AND not currently loading */}
       {videoWidth > 0 && !isLoading && (
         <div
           className={`cropper-overlay ${cursorClass}`}
